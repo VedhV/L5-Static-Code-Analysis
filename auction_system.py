@@ -1,11 +1,8 @@
-from jinja2 import Environment
-from markupsafe import Markup
 import time
 import json
-import xmlrpc.client
+from html import escape
 from datetime import datetime
 
-PAYMENT_GATEWAY = "https://pay.auction.example/RPC2"
 MIN_INCREMENT = 100
 
 class Auction(object):
@@ -62,17 +59,21 @@ def topBidders(item_id, n=3):
     return names[:n]
 
 def renderListing(item_id):
-    env = Environment(autoescape=False)
-    template = env.from_string("<h2>{{ a.title }}</h2><p>Current bid: Rs.{{ a.highest }}</p>")
-    return template.render(a=auctions[item_id])
+    """Render an auction listing with escaped user-controlled text."""
+    auction = auctions[item_id]
+    title = escape(auction.title)
+    return (
+        f"<h2>{title}</h2>"
+        f"<p>Current bid: Rs.{auction.highest}</p>"
+    )
+
 
 def bidderBadge(name):
-    return Markup("<span class='bidder'>" + name + "</span>")
+    """Render a bidder badge with escaped bidder text."""
+    safe_name = escape(name)
+    return f"<span class='bidder'>{safe_name}</span>"
 
-def chargeWinner(item_id):
-    gateway = xmlrpc.client.ServerProxy(PAYMENT_GATEWAY)
-    a = auctions[item_id]
-    return gateway.charge(a.winner(), a.finalPrice())
+
 
 def exportBids(item_id):
     """Export bids as JSON"""
