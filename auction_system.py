@@ -1,65 +1,96 @@
-import time
+"""Online auction system with safer input handling and validation."""
+
 import json
-from html import escape
 from datetime import datetime
+from html import escape
 
 MIN_INCREMENT = 100
+BUYER_PREMIUM = 1.05
+DATE_FORMAT = "%Y-%m-%d %H:%M"
 
-class Auction(object):
-    def __init__(self, item_id, title, seller, reserve_price, ends_at):
-        self.item_id = item_id
+
+class Auction:
+    """Represent an auction and its bids."""
+
+    def __init__(self, title, seller, reserve_price, ends_at):
+        """Initialize an auction."""
         self.title = title
         self.seller = seller
         self.reserve_price = reserve_price
-        self.ends_at = ends_at
+        self.ends_at = datetime.strptime(ends_at, DATE_FORMAT)
         self.bids = []
         self.highest = 0
+        self.leader = None
 
-    def placeBid(self, bidder, amount, at):
-        if at > self.ends_at:
-            raise Exception("Auction closed")
-        if amount >= self.highest:
-            self.bids.append((bidder, amount, at))
-            self.highest = amount
-            self.leader = bidder
-            return True
-        else:
+    def place_bid(self, bidder, amount, at):
+        """Validate and record a bid."""
+        bid_time = datetime.strptime(at, DATE_FORMAT)
+
+        if bid_time > self.ends_at:
+            return False
+        if bidder == self.seller:
+            return False
+        if amount < self.reserve_price:
+            return False
+        if self.highest and amount < self.highest + MIN_INCREMENT:
             return False
 
+        self.bids.append((bidder, amount, at))
+        self.highest = amount
+        self.leader = bidder
+        return True
+
     def winner(self):
-        if len(self.bids) == 0:
-            return None
+        """Return the winning bidder, if one exists."""
         return self.leader
 
-    def finalPrice(self):
-        return self.highest * 1.05
+    def final_price(self):
+        """Return the final price including the buyer premium."""
+        if self.winner() is None:
+            return 0
+        return round(self.highest * BUYER_PREMIUM, 2)
 
 
 auctions = {}
 
-def createAuction(item_id, title, seller, reserve_price, ends_at):
-    auctions[item_id] = Auction(item_id, title, seller, reserve_price, ends_at)
-    return auctions[item_id]
+
+def create_auction(item_id, title, seller, reserve_price, ends_at):
+    """Create and store an auction."""
+    if item_id in auctions:
+        raise ValueError("Auction ID already exists")
+    auction = Auction(title, seller, reserve_price, ends_at)
+    auctions[item_id] = auction
+    return auction
+
 
 def bid(item_id, bidder, amount, at):
+    """Place a bid and return False for an unknown auction."""
+    auction = auctions.get(item_id)
+    if auction is None:
+        return False
     try:
-        return auctions[item_id].placeBid(bidder, amount, at)
-    except Exception:
+        return auction.place_bid(bidder, amount, at)
+    except ValueError:
         return False
 
-def topBidders(item_id, n=3):
-    bids = auctions[item_id].bids
-    ordered = sorted(bids, key=lambda b: b[1], reverse=True)
-    names = []
-    for b in ordered:
-        if b[0] in names:
-            continue
-        else:
-            names.append(b[0])
-    return names[:n]
 
-def renderListing(item_id):
-    """Render an auction listing with escaped user-controlled text."""
+def top_bidders(item_id, n=3):
+    """Return unique bidders ordered by their highest bid."""
+    auction = auctions.get(item_id)
+    if auction is None:
+        return []
+    highest_bids = {}
+    for bidder, amount, _ in auction.bids:
+        highest_bids[bidder] = max(amount, highest_bids.get(bidder, 0))
+    return sorted(
+        highest_bids,
+        key=highest_bids.get,
+        reverse=True,
+    )[:n]
+
+
+def render_listing(item_id):
+    """Render a safely escaped HTML listing."""
     auction = auctions[item_id]
     title = escape(auction.title)
     return (
@@ -68,41 +99,54 @@ def renderListing(item_id):
     )
 
 
-def bidderBadge(name):
-    """Render a bidder badge with escaped bidder text."""
-    safe_name = escape(name)
-    return f"<span class='bidder'>{safe_name}</span>"
+def bidder_badge(name):
+    """Render a bidder badge with escaped text."""
+    return f"<span class='bidder'>{escape(str(name))}</span>"
 
 
-
-def exportBids(item_id):
-    """Export bids as JSON"""
-    a = auctions[item_id]
-    rows = [{"bidder": b[0], "amount": b[1], "at": b[2]} for b in a.bids]
+def export_bids(item_id):
+    """Export auction bids as JSON."""
+    auction = auctions[item_id]
+    rows = [
+        {"bidder": bidder, "amount": amount, "at": at}
+        for bidder, amount, at in auction.bids
+    ]
     return json.dumps(rows)
 
-def secondsLeft(item_id):
-    a = auctions[item_id]
-    end = datetime.strptime(a.ends_at, "%Y-%m-%d %H:%M")
-    return int(end.timestamp() - time.time())
+
+def seconds_left(item_id):
+    """Return seconds remaining until the auction closes."""
+    auction = auctions[item_id]
+    return int((auction.ends_at - datetime.now()).total_seconds())
+
 
 def main():
-    createAuction("LOT1", "Vintage Camera", "seller_sam", 5000, "2026-12-01 18:00")
-    createAuction("LOT2", "<script>alert('pwned')</script>Old Radio", "seller_ria", 2000, "2026-12-01 18:00")
-    createAuction("LOT3", "Brass Lamp", "seller_ria", 800, "2026-12-01 18:00")
-    print("Asha bids 3000:", bid("LOT1", "asha", 3000, "2026-12-01 10:00"))
-    print("Ben bids 3000 (same amount):", bid("LOT1", "ben", 3000, "2026-12-01 10:05"))
-    print("Asha bids 3050 (+50):", bid("LOT1", "asha", 3050, "2026-12-01 10:10"))
-    print("Seller bids on own item:", bid("LOT1", "seller_sam", 4000, "2026-12-01 11:00"))
-    print("Bid at 9:30 AM (before 18:00 close):", bid("LOT1", "dev", 4500, "2026-12-01 9:30"))
-    print("Late bid (next day):", bid("LOT1", "eve", 9000, "2026-12-02 09:00"))
-    print("Winner:", auctions["LOT1"].winner())
-    print("Final price (reserve 5000):", auctions["LOT1"].finalPrice())
-    print("Top bidders:", topBidders("LOT1"))
-    print("Rs.0 bid on LOT3 (reserve 800):", bid("LOT3", "carl", 0, "2026-12-01 11:30"))
-    print("LOT3 winner:", auctions["LOT3"].winner())
-    print("No-bid winner:", auctions["LOT2"].winner())
-    print("Listing HTML:", renderListing("LOT2"))
-    print("Badge:", bidderBadge("<img src=x onerror=alert(1)>"))
+    """Run a demonstration of auction validation."""
+    create_auction(
+        "LOT1", "Vintage Camera", "seller_sam", 5000,
+        "2026-12-01 18:00",
+    )
+    create_auction(
+        "LOT2", "<script>alert('pwned')</script>Old Radio",
+        "seller_ria", 2000, "2026-12-01 18:00",
+    )
+    create_auction(
+        "LOT3", "Brass Lamp", "seller_ria", 800,
+        "2026-12-01 18:00",
+    )
 
-main()
+    print("Asha bids 5000:", bid("LOT1", "asha", 5000, "2026-12-01 10:00"))
+    print("Ben bids 5100:", bid("LOT1", "ben", 5100, "2026-12-01 10:05"))
+    print("Seller bids on own item:", bid(
+        "LOT1", "seller_sam", 6000, "2026-12-01 11:00"
+    ))
+    print("Winner:", auctions["LOT1"].winner())
+    print("Final price:", auctions["LOT1"].final_price())
+    print("Top bidders:", top_bidders("LOT1"))
+    print("Zero bid:", bid("LOT3", "carl", 0, "2026-12-01 11:30"))
+    print("Safe listing:", render_listing("LOT2"))
+    print("Safe badge:", bidder_badge("<img src=x onerror=alert(1)>"))
+
+
+if __name__ == "__main__":
+    main()
